@@ -129,7 +129,7 @@ if [ ! -e autogen.sh ] && [ ! -e buildconf ] && [ ! -e ./configure ] && [ -s ./c
     $CI_TIME autoreconf -fiv
 fi
 ( # Custom additional options for libcurl
-  CONFIG_OPTS+=("--with-secure-transport")
+  CONFIG_OPTS+=("--without-ssl")
   $CI_TIME ./configure "${CONFIG_OPTS[@]}"
 )
 $CI_TIME make -j4

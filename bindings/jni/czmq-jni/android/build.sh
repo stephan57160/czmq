@@ -101,11 +101,7 @@ find ../../build/libs/ -type f -name 'czmq-jni-*.jar' ! -name '*javadoc.jar' ! -
 mkdir -p lib/$TOOLCHAIN_ABI
 cp libczmqjni.so lib/$TOOLCHAIN_ABI
 cp $ANDROID_BUILD_PREFIX/lib/*.so lib/$TOOLCHAIN_ABI
-if [ ! -x $ANDROID_NDK_ROOT/sources/cxx-stl/llvm-libc++/libs/$TOOLCHAIN_ABI/libc++_shared.so ]; then
-    cp $ANDROID_BUILD_SYSROOT/usr/lib/$TOOLCHAIN_HOST/libc++_shared.so lib/$TOOLCHAIN_ABI
-else
-    cp $ANDROID_NDK_ROOT/sources/cxx-stl/llvm-libc++/libs/$TOOLCHAIN_ABI/libc++_shared.so lib/$TOOLCHAIN_ABI
-fi
+cp ${ANDROID_STL_ROOT}/${ANDROID_STL} lib/$TOOLCHAIN_ABI
 
 #   Build android jar
 zip -r -m ../czmq-android-$TOOLCHAIN_ABI-4.2.2.jar lib/ org/ META-INF/

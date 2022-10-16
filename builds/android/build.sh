@@ -39,6 +39,12 @@ cd "$( dirname "${BASH_SOURCE[0]}" )"
 # Get access to android_build functions and variables
 source ./android_build_helper.sh
 
+# Choose a C++ standard library implementation from the ndk
+export ANDROID_BUILD_CXXSTL="gnustl_shared_49"
+
+# Additional flags for LIBTOOL, for LIBZMQ and other dependencies.
+export LIBTOOL_EXTRA_LDFLAGS='-avoid-version'
+
 BUILD_ARCH=$1
 if [ -z $BUILD_ARCH ]; then
     usage
@@ -110,8 +116,6 @@ fi
 
     # Remove *.la files as they might cause errors with cross compiled libraries
     find ${ANDROID_BUILD_PREFIX} -name '*.la' -exec rm {} +
-
-    export LIBTOOL_EXTRA_LDFLAGS='-avoid-version'
 
     (
         CONFIG_OPTS=()

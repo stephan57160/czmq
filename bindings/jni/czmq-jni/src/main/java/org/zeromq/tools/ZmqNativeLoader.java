@@ -120,6 +120,8 @@ public class ZmqNativeLoader {
     public static void loadLibrary(String libname, boolean optional) {
         if (!loadedLibraries.contains(libname)) {
             try {
+                System.err
+                    .println("[INFO] Trying to load library '" + libname + "'.");
                 NativeLoader.loadLibrary(libname);
             } catch (IOException e) {
                 if (optional) {

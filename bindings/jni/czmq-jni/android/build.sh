@@ -69,7 +69,7 @@ echo "********  Building CZMQ Android native libraries"
 
 #   Ensure we've built JNI interface
 echo "********  Building CZMQ JNI interface & classes"
-( cd ../.. && TERM=dumb ./gradlew build jar -PbuildPrefix=$BUILD_PREFIX --info )
+( cd ../.. && TERM=dumb ./gradlew build jar -PbuildPrefix=$BUILD_PREFIX -x test --info )
 
 echo "********  Building CZMQ JNI for Android"
 rm -rf build && mkdir build && cd build

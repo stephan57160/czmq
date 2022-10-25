@@ -157,7 +157,7 @@ $CI_TIME make install
 cd ${CZMQ_JNI_ROOT}
 [ -z "$TRAVIS_TAG" ] || IS_RELEASE="-PisRelease"
 
-TERM=dumb $CI_TIME ./gradlew build jar -PbuildPrefix=$BUILD_PREFIX $IS_RELEASE --info
+TERM=dumb $CI_TIME ./gradlew build jar -PbuildPrefix=$BUILD_PREFIX $IS_RELEASE -x test --info
 TERM=dumb $CI_TIME ./gradlew clean
 
 ########################################################################

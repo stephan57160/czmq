@@ -33,7 +33,7 @@ function usage {
     echo "Usage ./build.sh [ arm | arm64 | x86 | x86_64 ]"
 }
 
-# Use directory of current script as the build directory and working directory
+# Use directory of current script as the working directory
 cd "$( dirname "${BASH_SOURCE[0]}" )"
 
 # Get access to android_build functions and variables

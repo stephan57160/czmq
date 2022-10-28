@@ -7,12 +7,86 @@
 #   Exit if any step fails
 set -e
 
-# By default, use directory of current script as the Android build directory.
-# ANDROID_BUILD_DIR must be an absolute path:
-export ANDROID_BUILD_DIR="${ANDROID_BUILD_DIR:-$(cd $(dirname ${BASH_SOURCE[0]}) ; pwd)}"
+# Use directory of current script as the working directory
+cd "$(dirname "${BASH_SOURCE[0]}")"
+CZMQ_ROOT="$(cd ../.. && pwd)"
+
+########################################################################
+# Configuration & tuning options.
+########################################################################
+# Set default values used in ci builds
+export NDK_VERSION="${NDK_VERSION:-android-ndk-r25}"
+
+# Set default path to find Android NDK.
+# Must be of the form <path>/${NDK_VERSION} !!
+export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-/tmp/${NDK_VERSION}}"
+
+# With NDK r22b, the minimum SDK version range is [16, 31].
+# Since NDK r24, the minimum SDK version range is [19, 31].
+# SDK version 21 is the minimum version for 64-bit builds.
+export MIN_SDK_VERSION=${MIN_SDK_VERSION:-21}
+
+# Use directory of current script as the build directory
+# ${ANDROID_BUILD_DIR}/prefix/<build_arch>/lib will contain produced libraries
+export ANDROID_BUILD_DIR="${ANDROID_BUILD_DIR:-${PWD}}"
+
+# Clean before processing
+export ANDROID_BUILD_CLEAN="${ANDROID_BUILD_CLEAN:-yes}"
 
 # Set this to enable verbose profiling
-[ -n "${CI_TIME-}" ] || CI_TIME=""
+export CI_TIME="${CI_TIME:-}"
+
+# Set this to enable verbose tracing
+export CI_TRACE="${CI_TRACE:-no}"
+
+########################################################################
+# Utilities
+########################################################################
+function usage {
+    echo "CZMQ - Usage:"
+    echo "  export XXX=xxx"
+    echo "  ./build.sh [ arm | arm64 | x86 | x86_64 ]"
+    echo ""
+    echo "See this file (configuration & tuning options) for details"
+    echo "on variables XXX and their values xxx"
+    exit 1
+}
+
+# Initialize env variable XXX_ROOT, given dependency name "xxx".
+# If XXX_ROOT is not set:
+#    If a folder xxx exists close to current clone, set XXX_ROOT with it.
+#    Else, set XXX_ROOT with /tmp/tmp-deps/xxx.
+# Else
+#    Verify that folder XXX_ROOT exists.
+function init_dependency_root {
+    local lib_name
+    lib_name="$1"
+    local variable_name
+    variable_name="$(echo "${lib_name}" | tr '[:lower:]' '[:upper:]')_ROOT"
+    local variable_value
+    variable_value="$(eval echo "\${${variable_name}}")"
+
+    if [ -z "${variable_value}" ] ; then
+        if [ -d "${CZMQ_ROOT}/../${lib_name}" ] ; then
+            eval "export ${variable_name}=\"$(cd "${CZMQ_ROOT}/../${lib_name}" && pwd)\""
+        else
+            eval "export ${variable_name}=\"/tmp/tmp-deps/${lib_name}\""
+        fi
+        variable_value="$(eval echo "\${${variable_name}}")"
+    elif [ ! -d "${variable_value}" ] ; then
+        echo "CZMQ - Error: Folder '${variable_value}' does not exist."
+        exit 1
+    fi
+
+    echo "CZMQ - ${variable_name}=${variable_value}"
+}
+
+########################################################################
+# Sanity checks
+########################################################################
+BUILD_ARCH="$1"
+[ -z "${BUILD_ARCH}" ] && usage
+
 case "$CI_TIME" in
     [Yy][Ee][Ss]|[Oo][Nn]|[Tt][Rr][Uu][Ee])
         CI_TIME="time -p " ;;
@@ -20,8 +94,6 @@ case "$CI_TIME" in
         CI_TIME="" ;;
 esac
 
-# Set this to enable verbose tracing
-[ -n "${CI_TRACE-}" ] || CI_TRACE="no"
 case "$CI_TRACE" in
     [Nn][Oo]|[Oo][Ff][Ff]|[Ff][Aa][Ll][Ss][Ee])
         set +x ;;
@@ -29,15 +101,17 @@ case "$CI_TRACE" in
         set -x ;;
 esac
 
-function usage {
-    echo "Usage ./build.sh [ arm | arm64 | x86 | x86_64 ]"
-}
+########################################################################
+# Compilation
+########################################################################
+# Set ROOT path for LIBZMQ source tree
+init_dependency_root "libzmq"
 
-# Use directory of current script as the working directory
-cd "$( dirname "${BASH_SOURCE[0]}" )"
+# Set ROOT path for LIBMICROHTTPD source tree
+init_dependency_root "libmicrohttpd"
 
-# Get access to android_build functions and variables
-source ./android_build_helper.sh
+# Set ROOT path for LIBCURL source tree
+init_dependency_root "libcurl"
 
 # Choose a C++ standard library implementation from the ndk
 export ANDROID_BUILD_CXXSTL="gnustl_shared_49"
@@ -45,77 +119,90 @@ export ANDROID_BUILD_CXXSTL="gnustl_shared_49"
 # Additional flags for LIBTOOL, for LIBZMQ and other dependencies.
 export LIBTOOL_EXTRA_LDFLAGS='-avoid-version'
 
-BUILD_ARCH=$1
-if [ -z $BUILD_ARCH ]; then
-    usage
-    exit 1
-fi
-
-case $(uname | tr '[:upper:]' '[:lower:]') in
-  linux*)
-    export HOST_PLATFORM=linux-x86_64
-    ;;
-  darwin*)
-    export HOST_PLATFORM=darwin-x86_64
-    ;;
-  *)
-    echo "Unsupported platform"
-    exit 1
-    ;;
-esac
-
-# Set default values used in ci builds
-export NDK_VERSION=${NDK_VERSION:-android-ndk-r25}
-# With NDK r22b, the minimum SDK version range is [16, 31].
-# Since NDK r24, the minimum SDK version range is [19, 31].
-# SDK version 21 is the minimum version for 64-bit builds.
-export MIN_SDK_VERSION=${MIN_SDK_VERSION:-21}
+# Get access to android_build functions and variables
+# Perform some sanity checks and calculate some variables.
+source ./android_build_helper.sh
 
 # Set up android build environment and set ANDROID_BUILD_OPTS array
-android_build_set_env $BUILD_ARCH
+android_build_set_env "${BUILD_ARCH}"
+android_download_ndk
 android_build_env
 android_build_opts
 
-# Use a temporary build directory
-cache="/tmp/android_build/${TOOLCHAIN_ARCH}"
-rm -rf "${cache}"
-mkdir -p "${cache}"
-
 # Check for environment variable to clear the prefix and do a clean build
-if [[ $ANDROID_BUILD_CLEAN ]]; then
-    echo "Doing a clean build (removing previous build and depedencies)..."
-    rm -rf "${ANDROID_BUILD_PREFIX}"/*
-fi
+case "${ANDROID_BUILD_CLEAN}" in
+"" | "yes" )
+    android_build_trace "Doing a clean build (removing previous build and dependencies)..."
+    rm -rf "${ANDROID_BUILD_PREFIX:-android-build-prefix-not-set}"/*
+
+    # Called shells MUST not clean after ourselves !
+    export ANDROID_BUILD_CLEAN="no"
+    ;;
+esac
+
+VERIFY=("libczmq.so")
 
 ##
-# Make sure libzmq is built and copy the prefix
+# Make sure LIBZMQ is built and copy the prefix
 
 (android_build_verify_so "libzmq.so" &> /dev/null) || {
-    # Use a default value assuming the libzmq project sits alongside this one
-    test -z "$LIBZMQ_ROOT" && LIBZMQ_ROOT="$(cd ../../../libzmq && pwd)"
-
-    if [ ! -d "$LIBZMQ_ROOT" ]; then
-        echo "The LIBZMQ_ROOT directory does not exist"
-        echo "  ${LIBZMQ_ROOT}" run run
-        exit 1
+    if [ ! -d "${LIBZMQ_ROOT}" ]; then
+        # xxxx - download - xxxx
+	:
+    else
+        (cd "${LIBZMQ_ROOT}" && (make clean || :) && rm -f config.status)
     fi
-    echo "Building libzmq in ${LIBZMQ_ROOT}..."
 
-    (bash ${LIBZMQ_ROOT}/builds/android/build.sh $BUILD_ARCH) || exit 1
-    UPSTREAM_PREFIX=${LIBZMQ_ROOT}/builds/android/prefix/${TOOLCHAIN_ARCH}
-    cp -rn ${UPSTREAM_PREFIX}/* ${ANDROID_BUILD_PREFIX} || :
+    android_build_trace "Building LIBZMQ in ${LIBZMQ_ROOT}..."
+    (bash "${LIBZMQ_ROOT}/builds/android/build.sh" "${BUILD_ARCH}") || exit 1
+    UPSTREAM_PREFIX="${LIBZMQ_ROOT}/builds/android/prefix/${TOOLCHAIN_ARCH}"
+    cp -rn "${UPSTREAM_PREFIX}"/* "${ANDROID_BUILD_PREFIX}" || :
 }
+VERIFY+=("libzmq.so")
+
+
+(android_build_verify_so "libmicrohttpd.so" &> /dev/null) || {
+    if [ ! -d "${LIBMICROHTTPD_ROOT}" ]; then
+        # xxxx - download - xxxx
+	:
+    fi
+    android_build_trace "Building LIBMICROHTTPD in ${LIBMICROHTTPD_ROOT}..."
+
+    (
+        CONFIG_OPTS=()
+        CONFIG_OPTS+=("--quiet")
+        CONFIG_OPTS+=("${ANDROID_BUILD_OPTS[@]}")
+        CONFIG_OPTS+=("--disable-soname-versions")
+
+        android_build_library "LIBMICROHTTPD" "${LIBMICROHTTPD_ROOT}"
+    ) || exit 1
+}
+VERIFY+=("libmicrohttpd.so")
+
+
+(android_build_verify_so "libcurl.so" &> /dev/null) || {
+    if [ ! -d "${LIBCURL_ROOT}" ]; then
+        # xxxx - download - xxxx
+	:
+    fi
+    android_build_trace "Building LIBCURL in ${LIBCURL_ROOT}..."
+
+    (
+        CONFIG_OPTS=()
+        CONFIG_OPTS+=("--quiet")
+        CONFIG_OPTS+=("${ANDROID_BUILD_OPTS[@]}")
+        CONFIG_OPTS+=("--disable-soname-versions")
+
+        android_build_library "LIBCURL" "${LIBCURL_ROOT}"
+}
+VERIFY+=("libcurl.so")
+
 
 ##
-[ -z "$CI_TIME" ] || echo "`date`: Build czmq from local source"
+[ -z "${CI_TIME}" ] || echo "`date`: Build CZMQ from local source"
 
 (android_build_verify_so "libczmq.so" "libzmq.so" &> /dev/null) || {
-    rm -rf "${cache}/czmq"
-    (cp -r ../.. "${cache}/czmq" && cd "${cache}/czmq" \
-        && ( make clean || : ) && rm -f configure config.status)
-
-    # Remove *.la files as they might cause errors with cross compiled libraries
-    find ${ANDROID_BUILD_PREFIX} -name '*.la' -exec rm {} +
+    (cd "${CZMQ_ROOT}" && ( make clean || : ) && rm -f configure config.status)
 
     (
         CONFIG_OPTS=()
@@ -123,21 +210,23 @@ fi
         CONFIG_OPTS+=("${ANDROID_BUILD_OPTS[@]}")
         CONFIG_OPTS+=("--without-docs")
 
-        cd "${cache}/czmq" \
-        && $CI_TIME ./autogen.sh 2> /dev/null \
-        && android_show_configure_opts "LIBCZMQ" "${CONFIG_OPTS[@]}" \
-        && $CI_TIME ./configure "${CONFIG_OPTS[@]}" \
-        && $CI_TIME make -j 4 \
-        && $CI_TIME make install
+        android_build_library "CZMQ" "${CZMQ_ROOT}"
     ) || exit 1
 }
+
+##
+# Fetch the STL as well.
+
+cp "${ANDROID_STL_ROOT}/${ANDROID_STL}" "${ANDROID_BUILD_PREFIX}/lib/."
 
 ##
 # Verify shared libraries in prefix
 
 android_build_verify_so "libzmq.so"
-android_build_verify_so "libczmq.so" "libzmq.so"
-echo "Android (${TOOLCHAIN_ARCH}) build successful"
+android_build_verify_so "libmicrohttpd.so"
+android_build_verify_so "libcurl.so"
+android_build_verify_so "${VERIFY[@]}" "${ANDROID_STL}"
+android_build_trace "Android build successful"
 ################################################################################
 #  THIS FILE IS 100% GENERATED BY ZPROJECT; DO NOT EDIT EXCEPT EXPERIMENTALLY  #
 #  Read the zproject/README.md for information about making permanent changes. #

@@ -421,6 +421,37 @@ function android_show_configure_opts {
     echo ""
 }
 
+function android_download_library {
+    local tag="$1" ; shift
+    local clone_root="${1}" ; shift
+    local url="$1" ; shift
+
+    local archive="$(basename "${url}")"
+    local parent="$(dirname "${clone_root}")"
+
+    mkdir -p "${parent}"
+    pushd "${parent}"
+        rm -f "${archive}"
+        android_build_trace "Downloading '${tag}' from '${url}' ..."
+        wget -q "${url}"
+        android_build_trace "Extracting '${archive}' under under '${clone_root}' ..."
+        case "${archive}" in
+        *.tar.gz ) tar -xzf "${archive}" ; folder=$(basename "${archive}" ".tar.gz" ) ;;
+        *.tgz )    tar -xzf "${archive}" ; folder=$(basename "${archive}" ".tgz" ) ;;
+        * )        android_build_trace "Unknown archive extension '${archive}'" ; exit 1 ;;
+        esac
+
+        if [ ! -d "${clone_root}" ] ; then
+            if [ -d "${folder}" ] ; then
+                mv "${folder}" "${clone_root}"
+            else
+                android_build_trace "Failed to extract '${archive}'."
+                exit 1
+            fi
+        fi
+    popd
+}
+
 function android_clone_library {
     local tag="$1" ; shift
     local clone_root="$1" ; shift
@@ -448,19 +479,34 @@ function android_build_library {
         cd "${clone_root}" \
         && ( make clean || : ) && \
         rm -f config.status
-    ) || exit 1
+    ) || exit 1     # Cleanup failed
 
     (
         # Remove *.la files as they might cause errors with cross compiled libraries
         find "${ANDROID_BUILD_PREFIX}" -name '*.la' -exec rm {} +
+    ) || exit 1     # Android prefix cleanup failed
 
-        cd "${clone_root}" \
-        && ./autogen.sh \
-        && android_show_configure_opts "${tag}" "${CONFIG_OPTS[@]}" \
-        && ./configure "${CONFIG_OPTS[@]}" \
-        && make -j 4 \
-        && make install
-    ) || exit 1
+    android_build_trace "Building library '${tag}'."
+    android_show_configure_opts "${tag}" "${CONFIG_OPTS[@]}"
+
+    cd "${clone_root}"
+    if [ -e autogen.sh ]; then
+        ./autogen.sh 2> /dev/null
+    fi
+    if [ -e buildconf ]; then
+        ./buildconf 2> /dev/null
+    fi
+    if [ ! -e autogen.sh ] && [ ! -e buildconf ] && [ ! -e ./configure ] && [ -s ./configure.ac ]; then
+        libtoolize --copy --force && \
+        aclocal -I . && \
+        autoheader && \
+        automake --add-missing --copy && \
+        autoconf || \
+        autoreconf -fiv
+    fi
+    ./configure "${CONFIG_OPTS[@]}" \
+    && make -j4 \
+    && make install
 }
 
 ########################################################################

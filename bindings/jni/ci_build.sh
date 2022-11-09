@@ -7,12 +7,27 @@
 #   Exit if any step fails
 set -e
 
-export LIBZMQ_ROOT="${LIBZMQ_ROOT:-/tmp/tmp-deps/libzmq}"
-export LIBCURL_ROOT="${LIBCURL_ROOT:-/tmp/tmp-deps/libcurl}"
-export LIBMICROHTTPD_ROOT="${LIBMICROHTTPD_ROOT:-/tmp/tmp-deps/libmicrohttpd}"
+# Use directory of current script as the working directory
+cd "$(dirname "${BASH_SOURCE[0]}")"
+PROJECT_ROOT="$(cd ../.. && pwd)"
 
-# Set this to enable verbose profiling
-[ -n "${CI_TIME-}" ] || CI_TIME=""
+# Configuration
+export NDK_VERSION="${NDK_VERSION:-android-ndk-r25}"
+export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-/tmp/${NDK_VERSION}}"
+export MIN_SDK_VERSION=${MIN_SDK_VERSION:-21}
+export ANDROID_BUILD_DIR="${ANDROID_BUILD_DIR:-${PWD}}"
+export BUILD_PREFIX="${BUILD_PREFIX:-/tmp/jni_build}"
+export TRAVIS_OS_NAME="${TRAVIS_OS_NAME:-}"
+export BINDING_OPTS="${BINDING_OPTS}"
+
+export CI_TIME="${CI_TIME:-}"
+export CI_TRACE="${CI_TRACE:-no}"
+
+# You may specify your own, or let ./build.sh where to download the source tree for the following:
+#   export LIBZMQ_ROOT=<libzmq_source_tree>
+#   export LIBCURL_ROOT=<libcurl_source_tree>
+#   export LIBMICROHTTPD_ROOT=<libmicrohttpd_source_tree>
+
 case "$CI_TIME" in
     [Yy][Ee][Ss]|[Oo][Nn]|[Tt][Rr][Uu][Ee])
         CI_TIME="time -p " ;;
@@ -20,8 +35,6 @@ case "$CI_TIME" in
         CI_TIME="" ;;
 esac
 
-# Set this to enable verbose tracing
-[ -n "${CI_TRACE-}" ] || CI_TRACE="no"
 case "$CI_TRACE" in
     [Nn][Oo]|[Oo][Ff][Ff]|[Ff][Aa][Ll][Ss][Ee])
         set +x ;;
@@ -33,9 +46,7 @@ esac
 # Build and check the jni binding
 ########################################################################
 
-export BUILD_PREFIX=/tmp/jni_build
-CZMQ_JNI_ROOT=${PWD}
-CZMQ_ROOT=${PWD}/../..
+PROJECT_JNI_ROOT="${PROJECT_ROOT}/bindings/jni"
 
 CONFIG_OPTS=()
 CONFIG_OPTS+=("CFLAGS=-I${BUILD_PREFIX}/include")
@@ -136,7 +147,7 @@ $CI_TIME make -j4
 $CI_TIME make install
 
 
-cd $CZMQ_ROOT
+cd "${PROJECT_ROOT}"
 [ -z "$CI_TIME" ] || echo "`date`: Starting build of currently tested project..."
 git --no-pager log --oneline -n1
 if [ -e autogen.sh ]; then
@@ -158,8 +169,8 @@ $CI_TIME make -j4
 $CI_TIME make install
 [ -z "$CI_TIME" ] || echo "`date`: Build completed without fatal errors!"
 
-cd ${CZMQ_JNI_ROOT}
-[ -z "$TRAVIS_TAG" ] || IS_RELEASE="-PisRelease"
+cd "${PROJECT_JNI_ROOT}"
+[ -z "${TRAVIS_TAG}" ] || IS_RELEASE="-PisRelease"
 
 TERM=dumb $CI_TIME ./gradlew build jar ${GRADLEW_OPTS[@]} ${CZMQ_GRADLEW_OPTS} $IS_RELEASE
 TERM=dumb $CI_TIME ./gradlew clean
@@ -168,34 +179,7 @@ TERM=dumb $CI_TIME ./gradlew clean
 #  Build and check the jni android binding
 ########################################################################
 
-if [ "$TRAVIS_OS_NAME" == "linux" ] && [ "$BINDING_OPTS" == "android" ]; then
-    pushd ../../builds/android
-        export NDK_VERSION=android-ndk-r25
-        export ANDROID_NDK_ROOT="/tmp/${NDK_VERSION}"
-
-        case $(uname | tr '[:upper:]' '[:lower:]') in
-          linux*)
-            HOST_PLATFORM=linux
-            ;;
-          darwin*)
-            HOST_PLATFORM=darwin
-            ;;
-          *)
-            echo "Unsupported platform"
-            exit 1
-            ;;
-        esac
-
-        if [ ! -d "${ANDROID_NDK_ROOT}" ]; then
-            export FILENAME=$NDK_VERSION-$HOST_PLATFORM.zip
-
-            (cd '/tmp' \
-                && wget http://dl.google.com/android/repository/$FILENAME -O $FILENAME &> /dev/null \
-                && unzip -q $FILENAME) || exit 1
-            unset FILENAME
-        fi
-    popd
-
+if [ "${TRAVIS_OS_NAME}" == "linux" ] && [ "${BINDING_OPTS}" == "android" ]; then
     pushd czmq-jni/android
         $CI_TIME ./build.sh "arm"
         $CI_TIME ./build.sh "arm64"

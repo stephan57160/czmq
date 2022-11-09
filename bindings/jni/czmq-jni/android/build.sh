@@ -12,8 +12,91 @@
 #   Exit if any step fails
 set -e
 
+# Use directory of current script as the working directory
+cd "$(dirname "${BASH_SOURCE[0]}")"
+PROJECT_ROOT="$(cd ../../../.. && pwd)"
+
+########################################################################
+# Configuration & tuning options.
+########################################################################
+# Set default values used in ci builds
+export NDK_VERSION="${NDK_VERSION:-android-ndk-r25}"
+
+# Set default path to find Android NDK.
+# Must be of the form <path>/${NDK_VERSION} !!
+export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-/tmp/${NDK_VERSION}}"
+
+# With NDK r22b, the minimum SDK version range is [16, 31].
+# Since NDK r24, the minimum SDK version range is [19, 31].
+# SDK version 21 is the minimum version for 64-bit builds.
+export MIN_SDK_VERSION=${MIN_SDK_VERSION:-21}
+
+# Use directory of current script as the build directory
+# ${ANDROID_BUILD_DIR}/prefix/<build_arch>/lib will contain produced libraries
+export ANDROID_BUILD_DIR="${ANDROID_BUILD_DIR:-${PWD}}"
+
+# Clean before processing
+export ANDROID_BUILD_CLEAN="${ANDROID_BUILD_CLEAN:-no}"
+
 # Set this to enable verbose profiling
-[ -n "${CI_TIME-}" ] || CI_TIME=""
+export CI_TIME="${CI_TIME:-}"
+
+# Set this to enable verbose tracing
+export CI_TRACE="${CI_TRACE:-no}"
+
+# Get access to android_build functions and variables
+source "${CZMQ_ROOT}/builds/android/android_build_helper.sh"
+
+########################################################################
+# Utilities
+########################################################################
+function usage {
+    echo "CZMQ - Usage:"
+    echo "  export XXX=xxx"
+    echo "  ./build.sh [ arm | arm64 | x86 | x86_64 ]"
+    echo ""
+    echo "See this file (configuration & tuning options) for details"
+    echo "on variables XXX and their values xxx"
+    exit 1
+}
+
+# Initialize env variable XXX_ROOT, given dependency name "xxx".
+# If XXX_ROOT is not set:
+#    If a folder ${PROJECT_ROOT}/../xxx exists
+#       set XXX_ROOT with it.
+#    Else
+#       set XXX_ROOT with /tmp/tmp-deps/xxx.
+# Else
+#    Verify that folder XXX_ROOT exists.
+function init_dependency_root {
+    local lib_name
+    lib_name="$1"
+    local variable_name
+    variable_name="$(echo "${lib_name}" | tr '[:lower:]' '[:upper:]')_ROOT"
+    local variable_value
+    variable_value="$(eval echo "\${${variable_name}}")"
+
+    if [ -z "${variable_value}" ] ; then
+        if [ -d "${PROJECT_ROOT}/../${lib_name}" ] ; then
+            eval "export ${variable_name}=\"$(cd "${PROJECT_ROOT}/../${lib_name}" && pwd)\""
+        else
+            eval "export ${variable_name}=\"/tmp/tmp-deps/${lib_name}\""
+        fi
+        variable_value="$(eval echo "\${${variable_name}}")"
+    elif [ ! -d "${variable_value}" ] ; then
+        android_build_trace "Error: Folder '${variable_value}' does not exist."
+        exit 1
+    fi
+
+    android_build_trace "${variable_name}=${variable_value}"
+}
+
+########################################################################
+# Sanity checks
+########################################################################
+BUILD_ARCH="$1"
+[ -z "${BUILD_ARCH}" ] && usage
+
 case "$CI_TIME" in
     [Yy][Ee][Ss]|[Oo][Nn]|[Tt][Rr][Uu][Ee])
         CI_TIME="time -p " ;;
@@ -21,8 +104,6 @@ case "$CI_TIME" in
         CI_TIME="" ;;
 esac
 
-# Set this to enable verbose tracing
-[ -n "${CI_TRACE-}" ] || CI_TRACE="no"
 case "$CI_TRACE" in
     [Nn][Oo]|[Oo][Ff][Ff]|[Ff][Aa][Ll][Ss][Ee])
         set +x ;;
@@ -32,87 +113,73 @@ case "$CI_TRACE" in
         ;;
 esac
 
-function usage {
-    echo "Usage ./build.sh [ arm | arm64 | x86 | x86_64 ]"
-}
+init_dependency_root "libzmq"
+init_dependency_root "uuid"
+init_dependency_root "systemd"
+init_dependency_root "lz4"
+init_dependency_root "libcurl"
+init_dependency_root "nss"
+init_dependency_root "libmicrohttpd"
 
-BUILD_ARCH=$1
-if [ -z $BUILD_ARCH ]; then
-    usage
-    exit 1
-fi
-
-case $(uname | tr '[:upper:]' '[:lower:]') in
-  linux*)
-    export HOST_PLATFORM=linux-x86_64
-    ;;
-  darwin*)
-    export HOST_PLATFORM=darwin-x86_64
-    ;;
-  *)
-    echo "Unsupported platform"
-    exit 1
-    ;;
-esac
-
-source ../../../../builds/android/android_build_helper.sh
-
-export MIN_SDK_VERSION=21
-export ANDROID_BUILD_DIR=/tmp/android_build
-
+########################################################################
+# Compilation
+########################################################################
 GRADLEW_OPTS=()
-GRADLEW_OPTS+=("-PbuildPrefix=$BUILD_PREFIX")
+GRADLEW_OPTS+=("-PbuildPrefix=${BUILD_PREFIX}")
 GRADLEW_OPTS+=("--info")
 
 #   Build any dependent libraries
 #   Use a default value assuming that dependent libraries sits alongside this one
 
 #   Ensure we've built dependencies for Android
-echo "********  Building CZMQ Android native libraries"
-( cd ../../../../builds/android && ./build.sh $BUILD_ARCH )
+android_build_trace "Building Android native libraries"
+( cd ../../../../builds/android && ./build.sh "${BUILD_ARCH}" )
 
 #   Ensure we've built JNI interface
-echo "********  Building CZMQ JNI interface & classes"
+android_build_trace "Building JNI interface & classes"
 ( cd ../.. && TERM=dumb ./gradlew build jar ${GRADLEW_OPTS[@]} ${CZMQ_GRADLEW_OPTS} )
 
-echo "********  Building CZMQ JNI for Android"
+android_build_trace "Building Android JNI"
 rm -rf build && mkdir build && cd build
+
 # Export android build's environment variables for cmake
-android_build_set_env $BUILD_ARCH
+android_build_set_env "${BUILD_ARCH}"
+android_download_ndk
 (
     VERBOSE=1 \
     cmake \
-        -DANDROID_ABI=$TOOLCHAIN_ABI \
-        -DANDROID_PLATFORM=$MIN_SDK_VERSION \
+        -DANDROID_ABI="${TOOLCHAIN_ABI}" \
+        -DANDROID_PLATFORM="${MIN_SDK_VERSION}" \
         -DANDROID_STL=c++_shared \
-        -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
-        -DCMAKE_FIND_ROOT_PATH=$ANDROID_BUILD_PREFIX \
+        -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_ROOT}"/build/cmake/android.toolchain.cmake \
+        -DCMAKE_FIND_ROOT_PATH="${ANDROID_BUILD_PREFIX}" \
         ..
 )
 
 #   CMake wrongly searches current directory and then toolchain path instead
 #   of lib path for these files, so make them available temporarily
-ln -s $ANDROID_SYS_ROOT/usr/lib/crtend_so.o
-ln -s $ANDROID_SYS_ROOT/usr/lib/crtbegin_so.o
+ln -s "${ANDROID_SYS_ROOT}"/usr/lib/crtend_so.o
+ln -s "${ANDROID_SYS_ROOT}"/usr/lib/crtbegin_so.o
 
-make $MAKE_OPTIONS
+make ${MAKE_OPTIONS}
 
-echo "********  Building jar for $TOOLCHAIN_ABI"
+android_build_trace "Building JAR for '${TOOLCHAIN_ABI}'."
+
 #   Copy class files into org/zeromq/etc.
 find ../../build/libs/ -type f -name 'czmq-jni-*.jar' ! -name '*javadoc.jar' ! -name '*sources.jar' -exec unzip -q {} +
 
 #   Copy native libraries into lib/$TOOLCHAIN_ABI
-mkdir -p lib/$TOOLCHAIN_ABI
-cp libczmqjni.so lib/$TOOLCHAIN_ABI
-cp $ANDROID_BUILD_PREFIX/lib/*.so lib/$TOOLCHAIN_ABI
-cp ${ANDROID_STL_ROOT}/${ANDROID_STL} lib/$TOOLCHAIN_ABI
+mkdir -p lib/"${TOOLCHAIN_ABI}"
+cp libczmqjni.so lib/"${TOOLCHAIN_ABI}"
+cp "${ANDROID_BUILD_PREFIX}"/lib/*.so lib/"${TOOLCHAIN_ABI}"
+cp "${ANDROID_STL_ROOT}/${ANDROID_STL}" lib/"${TOOLCHAIN_ABI}"
 
 #   Build android jar
-zip -r -m ../czmq-android-$TOOLCHAIN_ABI-4.2.2.jar lib/ org/ META-INF/
+zip -r -m ../czmq-android-"${TOOLCHAIN_ABI}"-4.2.2.jar lib/ org/ META-INF/
 cd ..
 rm -rf build
 
-echo "********  Merging ABI jars"
+android_build_trace "Merging ABI jars"
 mkdir build && cd build
 #   Copy contents from all ABI jar - overwriting class files and manifest
 unzip -qo '../czmq-android-*4.2.2.jar'
@@ -121,4 +188,4 @@ zip -r -m ../czmq-android-4.2.2.jar lib/ org/ META-INF/
 cd ..
 rm -rf build
 
-echo "********  Complete"
+android_build_trace "Build complete"

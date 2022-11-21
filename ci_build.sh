@@ -368,7 +368,7 @@ default|default-Werror|default-with-docs|valgrind|clang-format-check)
             $CI_TIME autoreconf -fiv
         fi
         ( # Custom additional options for libcurl
-            CONFIG_OPTS+=("--with-secure-transport")
+            CONFIG_OPTS+=("--without-ssl")
             $CI_TIME ./configure "${CONFIG_OPTS[@]}"
         )
         if [ -e ./configure ]; then

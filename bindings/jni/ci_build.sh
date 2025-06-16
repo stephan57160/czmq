@@ -100,8 +100,9 @@ mkdir -p /tmp/tmp-deps
 ######################
 #  Build native 'libcurl.so'
 (
-    # Custom additional options for libcurl
-    CONFIG_OPTS+=("--with-secure-transport")
+    # Ugly hack for 'libcurl', as it does not compile on ANDROID.
+    CONFIG_OPTS+=("--without-ssl")
+    CONFIG_OPTS+=("--without-libpsl")
 
     android_build_library "LIBCURL" "${LIBCURL_ROOT}"
 )

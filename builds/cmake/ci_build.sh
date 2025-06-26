@@ -191,7 +191,8 @@ if ! ((command -v dpkg >/dev/null 2>&1 && dpkg -s libcurl4-gnutls-dev >/dev/null
         $CI_TIME autoreconf -fiv
     fi
     ( # Custom additional options for libcurl
-      CONFIG_OPTS+=("--with-secure-transport")
+      CONFIG_OPTS+=("--without-ssl")
+      CONFIG_OPTS+=("--without-libpsl")
       $CI_TIME ./configure "${CONFIG_OPTS[@]}"
     )
     if [ -e ./configure ]; then
